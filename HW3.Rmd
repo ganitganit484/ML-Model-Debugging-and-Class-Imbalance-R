@@ -1,0 +1,259 @@
+---
+title: "HW3: Debugging Imbalance Data"
+author: "Ganit Golin - 325665651"
+output:
+  html_document:
+    toc: true
+    theme: united
+---
+
+### Instructions
+
+1. All assignments are individual!
+2. This assignment should be uploaded as one html file (after knit).
+3. Questions about the assignment should be asked using the Assignments forums. 
+4. Write your name and id at the top of the file 
+
+
+**Exercise overview:** A junior data scientist at your company built a logistic regression model to predict customer churn and reported 90% accuracy, claiming it as a "highly predictive" model. Your objective is to audit this model, identify statistical flaws in the naive analysis, and explain why the initial claims are misleading.
+  
+**Dataset:** `customer_churn.csv` (Target variable: `churn`, where 1 = Left, 0 = Stayed).
+
+---
+
+## 0 Setup
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(message = FALSE, warning = FALSE, echo = TRUE)
+set.seed(123)   # make your work reproducible!
+```
+
+Install/load the packages you will need: **tidyverse**, **lubridate**, **tidymodels**, **GGally**, and any others you choose (e.g., **vip** for variable‑importance plots).
+
+```{r packages}
+library(tidyverse)
+library(lubridate)
+library(tidymodels)
+library(GGally)
+library(vip)
+```
+
+---
+
+## 1 Data preparation 
+
+* Load the `customer_churn.csv` file into a dataframe named `churn_df`
+* Inspect the data (glimpse or head)
+
+
+```{r data-prep}
+churn_df <- read.csv("customer_churn.csv")
+head(churn_df)
+```
+
+---
+
+## 2 Basic Analysis 
+**Task:** Replicate the junior scientist's naive approach.
+
+* Split the data into train and test sets (80-20).
+* Train a logistic regression model using **ALL** available columns as predictors.
+* Report the overall accuracy on the test set.
+* Compare the accuracy to the baseline churn rate (class balance).
+
+```{r replication}
+#Removing columns that are not relevant to prediction, dividing the data into 80 percent training and 20 percent testing.
+churn_df_changed <- churn_df %>%
+    #We will make the churn column a categorical column rather than a numeric one.
+    mutate(churn = as.factor(churn)) 
+#PROP defines the percentage of data we want to allocate to training the model and churn is the column we want to predict.
+data_split <- initial_split(churn_df_changed, prop = 0.80, strata = churn)
+train_data <- training(data_split)
+test_data  <- testing(data_split)
+```
+
+```{r}
+#Choosing the type of regression we will use, adjusting the model, and defining the columns based on which we will make the prediction.
+
+#We will define the type of regression we want to use as logistic regression
+lr_model <- logistic_reg() %>%
+  set_engine("glm") %>%
+  #Since we want to predict churn, which is a column with a binary value that defines yes or no left, we will   use classification.
+  set_mode("classification") %>%
+  #We will define that the model's prediction will be performed based on all columns except   for the ID column.
+  fit(churn ~ .-customer_id, data = train_data)
+```
+
+```{r}
+#We will make a prediction on the test data.
+predictions <- predict(lr_model, test_data) %>%
+  #bind_cols defines that we want to see the data that we predicted and automatically        inserted into a column called .pred_class against the actual data of the test group in     the churn column.
+  bind_cols(test_data)
+
+#We will enter our prediction into the accuracy function which will return the percentage of agreement between the prediction and the truth found in the churn column.
+predictions %>%
+  accuracy(truth = churn, estimate = .pred_class)
+```
+
+```{r}
+train_data %>% 
+  count(churn) %>% 
+  mutate(percentage = n / sum(n) * 100)
+```
+
+**Question 2.1:** Is the reported 90% accuracy a reliable metric of model performance? Why or why not? Answer below
+
+**Answer**: [The reported accuracy is not a reliable measure because we can see in the division we made above that in the test data distribution there are 85 percent of people who did not leave, compared to 15 percent who did leave. The imbalance between the two means that even if we were to create a model that constantly predicts that the customer did not leave, the level of accuracy we would obtain is 85%. Therefore, the 92% accuracy we obtained does not truly represent the quality of the model but the imbalance in the data.]
+
+---
+
+## 3 Feature Issues: Multicollinearity 
+**Task:** The dataset contains financial features like `monthly_charges`, `tenure`, and `total_charges`.
+
+* Calculate the correlations between these numeric features.
+* Visualize the correlations (e.g., using ggcorr or a heatmap).
+
+```{r multicollinearity}
+#Select the relevant columns from the data.
+financial_features <- churn_df_changed %>%
+  select(monthly_charges, tenure, total_charges)
+
+#We will insert all the columns we selected into a correlation matrix.
+cor_matrix <- cor(financial_features, use = "complete.obs")
+print(cor_matrix)
+```
+```{r}
+ggcorr(financial_features, 
+       method = c("everything", "pearson"), 
+       label = TRUE,
+       label_size = 5,
+       label_round = 2,
+       low = "steelblue",
+       mid = "gray",
+       high = "indianred",
+       name = "Correlation") +
+  ggtitle("Correlation Heatmap: Financial Features")
+```
+
+**Question 3.1**: Identify which variables are highly correlated (multicollinear). Why is including all of them in a regression model problematic for interpreting coefficients?
+
+Answer: [The highly correlated variables are tenure and total_charges (0.85), as well as monthly_charges and total_charges (0.45). Including all of them is problematic for interpreting coefficients because it becomes impossible to isolate the individual effect of each variable. When predictors are redundant, the model cannot clearly assign 'credit' for the churn to a specific factor. This leads to unstable coefficients, where a truly important variable might appear statistically insignificant or have an illogical weight, simply because its information is already captured by another correlated variable.]
+
+---
+
+## 4 Spurious Correlations & Causality
+**Task:** Examine the model coefficients to see what creates the predictions.
+
+* Extract and sort the coefficients (log-odds) from your model.  
+* Look for variables that are statistically significant but logically nonsense.
+
+```{r spurious}
+model_coefficients <- lr_model %>%
+  tidy() %>%
+  mutate(abs_estimate = abs(estimate)) %>% 
+  arrange(desc(abs_estimate))
+
+print(model_coefficients)
+```
+A key finding in the coefficients analysis is that is_tuesday_signup has a surprisingly high statistical impact. Logically, this is nonsensical, as the day of the week a customer signs up should not causally influence their long-term churn behavior. This is a classic symptom of overfitting, where the model learns random noise as if it were a significant pattern.
+
+Conversely, variables with strong logical links to churn, such as tenure and monthly_charges, show a disproportionately low impact. This suggests that the multicollinearity identified earlier (between tenure and total_charges) has 'diluted' their coefficients, causing the model to shift its importance toward irrelevant but 'cleaner' noise variables like the signup day. This makes the model's predictions highly unreliable for business decision-making.
+
+
+**Question 4.1**: Look at the coefficient for `is_tuesday_signup`.
+
+* Does it increase or decrease the probability of churn?
+
+* Is it plausible that the day of the week a customer signed up causes them to cancel months later?
+
+* Provide a real-world explanation for why this correlation might exist (e.g., a confounder or data artifact).
+
+**Answer:** [Notice that the estimate column for is_tuesday_signup has a positive value, which means that signing up on a Tuesday increases the likelihood of churn according to the model.
+
+It is unlikely that the day of the week a customer signs up will cause them to cancel months later.
+This correlation could exist for a variety of reasons, for example:
+- Coincidence that most of the people who left the company joined on a Tuesday.
+- It is possible that there was a technical problem with the registration system on one of the Tuesdays that caused some of the customer details that signed up to be deleted/changed, resulting in poor customer service and customer churn.]
+
+---
+
+## 5 LLM Audit 
+
+* Prompt an LLM to suggest issues with the regression analysis.
+* Use the LLM to generate alternative evaluation metrics for the junior data scientist's model.
+* Fit a better model addressing the statistical flaws identified in previous sections.
+
+```{r LLM}
+# The recipe actually tells R to insert the model after we perform all the operations listed below.
+better_recipe <- recipe(churn ~ ., data = train_data) %>%
+  # We will remove the columns that we found to interfere with the model or are not related   to the prediction.
+  step_rm(total_charges, is_tuesday_signup) %>%
+  # Removing variables that have zero variance
+  step_zv(all_predictors())
+
+# Model definition (logistic regression)
+lr_spec <- logistic_reg() %>%
+  set_engine("glm") %>%
+  set_mode("classification")
+
+# Building a Workflow (connects the recipe to the model))
+better_workflow <- workflow() %>%
+  add_recipe(better_recipe) %>%
+  add_model(lr_spec)
+
+# We will faithfully follow the updated model.
+better_fit <- better_workflow %>%
+  fit(data = train_data)
+
+# We will introduce the new coefficients
+better_fit %>% 
+  extract_fit_parsnip() %>% 
+  tidy() %>% 
+  arrange(desc(abs(estimate)))
+```
+To address the limitations of the initial analysis, I prompted an LLM to identify potential flaws and suggest more appropriate evaluation metrics. The LLM highlighted that Accuracy is a misleading metric in this case due to the class imbalance (85% non-churners). A model could achieve high accuracy simply by predicting that no one will churn, which provides zero business value.
+
+Following the LLM's recommendations, I shifted the focus to the following alternative metrics:
+
+Recall (Sensitivity): This measures the model's ability to correctly identify actual churners. For example, missing a customer who is about to leave is more costly than misidentifying a loyal customer as a risk.
+
+Precision: This measures how many of the customers flagged as 'churn risk' actually left. 
+
+F1-Score: Since there is often a trade-off between Precision and Recall, the F1-Score provides a balanced harmonic mean of both, giving a more honest representation of the model's performance on the minority class (churners).
+
+ROC AUC: This provides an overall measure of how well the model distinguishes between the two classes, regardless of the classification threshold."
+
+**Question 5.1:** Describe the metrics and model changes you implemented. How does it help fixing previous problems?
+
+**Answer:** [To fix the issues identified, we removed variables that caused multicollinearity, specifically total_charges, which was a redundant derivative of monthly_charges and tenure. We also excluded variables that represented spurious correlations, such as is_tuesday_signup, to prevent the model from overfitting on random noise.
+
+By eliminating these redundant and irrelevant features, the model can now provide more stable and reliable coefficients. This allows us to correctly assign 'credit' to the actual churn drivers, such as contract type and tenure, leading to a more interpretable and actionable business model.]
+
+---
+
+## 6 Conclusion & Recommendation 
+
+* Use your refined model to predict on the test set and evaluate the results using accuracy and your suggested evaluation metrics.
+
+```{r evaluate}
+#The new model creates the prediction on the test data
+better_results <- predict(better_fit, test_data) %>%
+  #We will add that the model will not only predict whether the customer will abandon/not abandon but will also predict the percentages for each of the options.
+  bind_cols(predict(better_fit, test_data, type = "prob")) %>%
+  #We will compare our prediction to the true results in the churn column.
+  bind_cols(test_data %>% select(churn))
+
+# We will create a kind of package of the various indicators that we mentioned in the previous section.
+eval_metrics <- metric_set(accuracy, recall, precision, roc_auc)
+
+# Calculating metrics with explicit column names
+performance_report <- better_results %>%
+  eval_metrics(truth = churn,estimate = .pred_class,.pred_1)
+
+print(performance_report)
+```
+
+**Question 6.1:** Discuss whether the model meets your expectations.
+
+**Answer:** [The new model matches my expectations. You can see that although on the surface the accuracy has decreased a bit, which is exactly what we expected to happen because we removed the columns that caused overfitting, we can now say that the accuracy of the model is much more reliable. In addition, you can notice that the percentage of identification of a person who has abandoned (the Recall index) is high, as is the index of prediction that a person will abandon (the Precision index). There is usually a trade-off between the two indices Recall and Precision because when we try to catch as many of the people who abandoned as possible, we tend to predict more people who will abandon, which creates an incorrect prediction, but in this model there is no problem and both indices remain high.]
+
