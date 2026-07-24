@@ -1,4 +1,3 @@
-# ML-Model-Debugging-and-Class-Imbalance-R
 # Model Auditing & Debugging: Logistic Regression in R
 **View Interactive Report:** [Live HTML Report](https://ganitganit484.github.io/ML-Model-Debugging-and-Class-Imbalance-R/)
 This repository contains a model audit of a naive logistic regression pipeline built to predict customer churn. 
