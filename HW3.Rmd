@@ -1,19 +1,9 @@
 ---
-title: "HW3: Debugging Imbalance Data"
-author: "Ganit Golin - 325665651"
 output:
   html_document:
     toc: true
     theme: united
 ---
-
-### Instructions
-
-1. All assignments are individual!
-2. This assignment should be uploaded as one html file (after knit).
-3. Questions about the assignment should be asked using the Assignments forums. 
-4. Write your name and id at the top of the file 
-
 
 **Exercise overview:** A junior data scientist at your company built a logistic regression model to predict customer churn and reported 90% accuracy, claiming it as a "highly predictive" model. Your objective is to audit this model, identify statistical flaws in the naive analysis, and explain why the initial claims are misleading.
   
